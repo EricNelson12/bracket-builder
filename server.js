@@ -5,11 +5,14 @@ const crypto = require('crypto');
 const { generateBracket, propagateWinner, resetFromMatch } = require('./lib/bracket');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'tournaments.json');
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
+
+app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'presenter.html')));
+app.get('/config', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // --- Persistence helpers ---
 
