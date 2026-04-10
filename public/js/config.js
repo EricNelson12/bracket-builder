@@ -5,17 +5,6 @@ const errorMsg = document.getElementById('error-msg');
 const bracketHint = document.getElementById('bracket-hint');
 const list = document.getElementById('tournament-list');
 
-// Modal elements
-const modalOverlay = document.getElementById('modal-overlay');
-const editNameInput = document.getElementById('edit-name');
-const editTeamsInput = document.getElementById('edit-teams');
-const editBracketHint = document.getElementById('edit-bracket-hint');
-const editErrorMsg = document.getElementById('edit-error-msg');
-const modalSaveBtn = document.getElementById('modal-save-btn');
-const modalCancelBtn = document.getElementById('modal-cancel-btn');
-
-let editingTournament = null; // the full tournament object being edited
-
 // ── Create form ──
 
 function showError(msg) {
@@ -76,10 +65,12 @@ createBtn.addEventListener('click', async () => {
     return showError(err.error || 'Failed to create tournament.');
   }
 
+  const created = await res.json();
   nameInput.value = '';
   teamsInput.value = '';
   bracketHint.textContent = '';
-  await loadTournaments();
+  // Navigate directly to the new tournament's config page
+  window.location.href = `/config/${created.id}`;
 });
 
 // ── Tournament list ──
@@ -104,7 +95,7 @@ async function loadTournaments() {
           <div class="t-meta">${totalTeams} teams, ${size}-team bracket${byeNote}</div>
         </div>
         <div class="t-actions">
-          <button class="btn-secondary btn-sm" onclick="openEditModal('${t.id}')">Edit</button>
+          <a class="btn-secondary btn-sm" href="/config/${t.id}">Edit</a>
           <button class="btn-danger btn-sm" onclick="deleteTournament('${t.id}')">Delete</button>
         </div>
       </li>`;
@@ -116,83 +107,6 @@ async function deleteTournament(id) {
   await fetch(`/api/tournaments/${id}`, { method: 'DELETE' });
   await loadTournaments();
 }
-
-// ── Edit modal ──
-
-async function openEditModal(id) {
-  const res = await fetch('/api/tournaments');
-  const tournaments = await res.json();
-  editingTournament = tournaments.find(t => t.id === id);
-  if (!editingTournament) return;
-
-  editNameInput.value = editingTournament.name;
-  editTeamsInput.value = editingTournament.teams.join('\n');
-  editBracketHint.textContent = '';
-  editErrorMsg.style.display = 'none';
-  updateHint(editingTournament.teams, editBracketHint);
-
-  modalOverlay.style.display = 'flex';
-  editNameInput.focus();
-}
-
-function closeModal() {
-  modalOverlay.style.display = 'none';
-  editingTournament = null;
-}
-
-modalCancelBtn.addEventListener('click', closeModal);
-modalOverlay.addEventListener('click', (e) => {
-  if (e.target === modalOverlay) closeModal();
-});
-
-editTeamsInput.addEventListener('input', () => {
-  updateHint(parseTeams(editTeamsInput.value), editBracketHint);
-});
-
-modalSaveBtn.addEventListener('click', async () => {
-  if (!editingTournament) return;
-  editErrorMsg.style.display = 'none';
-
-  const newName = editNameInput.value.trim();
-  const newTeams = parseTeams(editTeamsInput.value);
-
-  if (!newName) {
-    editErrorMsg.textContent = 'Please enter a tournament name.';
-    editErrorMsg.style.display = 'block';
-    return;
-  }
-  if (newTeams.length < 2) {
-    editErrorMsg.textContent = 'Please enter at least 2 teams.';
-    editErrorMsg.style.display = 'block';
-    return;
-  }
-
-  const teamsChanged = JSON.stringify(newTeams) !== JSON.stringify(editingTournament.teams);
-
-  if (teamsChanged) {
-    const ok = confirm('Changing the team list will reset all match results. Continue?');
-    if (!ok) return;
-  }
-
-  const body = { name: newName };
-  if (teamsChanged) body.teams = newTeams;
-
-  const res = await fetch(`/api/tournaments/${editingTournament.id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-
-  if (!res.ok) {
-    const err = await res.json();
-    editErrorMsg.textContent = err.error || 'Failed to save changes.';
-    editErrorMsg.style.display = 'block';
-    return;
-  }
-
-  closeModal();
-  await loadTournaments();
-});
 
 // ── Utils ──
 

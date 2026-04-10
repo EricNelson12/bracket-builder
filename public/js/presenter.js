@@ -1,33 +1,33 @@
 const tabsEl = document.getElementById('tabs');
 const bracketArea = document.getElementById('bracket-area');
+const presenterInfoEl = document.getElementById('presenter-info');
 const popoverOverlay = document.getElementById('popover-overlay');
 const popoverEl = document.getElementById('popover');
 
 let tournaments = [];
 let activeTournamentId = null;
+let countdownInterval = null;
 
 // ── Data loading ──
 
 async function loadData() {
   const res = await fetch('/api/tournaments');
   const fresh = await res.json();
-
   const freshIds = fresh.map(t => t.id);
 
   tournaments = fresh;
 
-  // If active tournament was deleted, reset
   if (activeTournamentId && !freshIds.includes(activeTournamentId)) {
     activeTournamentId = null;
   }
 
-  // Default to first tournament
   if (!activeTournamentId && tournaments.length > 0) {
     activeTournamentId = tournaments[0].id;
   }
 
   renderTabs();
-  renderBracket();
+  renderCurrentBracket();
+  renderInfo();
 }
 
 // Poll every 5 seconds
@@ -42,7 +42,7 @@ function renderTabs() {
     return;
   }
   tabsEl.innerHTML = tournaments.map(t => `
-    <button class="tab ${t.id === activeTournamentId ? 'active' : ''}" data-id="${t.id}">
+    <button class="tab ${t.id === activeTournamentId ? 'active' : ''}" data-id="${escAttr(t.id)}">
       ${escHtml(t.name)}
     </button>
   `).join('');
@@ -51,123 +51,81 @@ function renderTabs() {
     btn.addEventListener('click', () => {
       activeTournamentId = btn.dataset.id;
       renderTabs();
-      renderBracket();
+      renderCurrentBracket();
+      renderInfo();
     });
   });
 }
 
 // ── Bracket rendering ──
 
-function renderBracket() {
+function renderCurrentBracket() {
   if (tournaments.length === 0) {
-    bracketArea.innerHTML = '<p class="no-tournaments">No tournaments yet. <a href="/">Create one</a>.</p>';
+    bracketArea.innerHTML = '<p class="no-tournaments">No tournaments yet. <a href="/config">Create one</a>.</p>';
     return;
   }
 
   const t = tournaments.find(t => t.id === activeTournamentId);
   if (!t) return;
 
-  const rounds = t.rounds;
-  const totalRounds = rounds.length;
-
-  // Build HTML
-  let html = '<div class="bracket">';
-
-  rounds.forEach((round, ri) => {
-    // Round column
-    html += `<div class="round-col">`;
-    html += `<div class="round-label">${roundName(ri, totalRounds)}</div>`;
-
-    round.matches.forEach(match => {
-      const isByeBye = match.team1 === 'BYE' && match.team2 === 'BYE';
-      const isBye = match.team1 === 'BYE' || match.team2 === 'BYE';
-      const isPlayable = !isBye && match.team1 && match.team2; // clickable whether won or not
-      const classes = ['match'];
-      if (isBye) classes.push('bye');
-      if (isPlayable) classes.push('clickable');
-      if (match.winner) classes.push('settled');
-
-      const slot1Winner = match.winner && match.winner === match.team1;
-      const slot2Winner = match.winner && match.winner === match.team2;
-
-      // BYE vs BYE: render an invisible placeholder to preserve layout/connectors
-      if (isByeBye) {
-        html += `<div class="match-wrapper hidden"><div class="match"></div></div>`;
-        return;
-      }
-
-      html += `<div class="match-wrapper">`;
-      html += `<div class="${classes.join(' ')}" data-tournament="${t.id}" data-match="${match.id}" data-team1="${escAttr(match.team1 || '')}" data-team2="${escAttr(match.team2 || '')}">`;
-
-      // Slot 1
-      html += `<div class="match-slot ${slot1Winner ? 'winner' : ''} ${!match.team1 || match.team1 === 'BYE' ? 'tbd' : ''}">`;
-      if (match.team1 === 'BYE') {
-        html += `<span>BYE</span>`;
-      } else if (match.team1) {
-        html += escHtml(match.team1);
-      } else {
-        html += `<span class="tbd">TBD</span>`;
-      }
-      html += `</div>`;
-
-      // Slot 2
-      html += `<div class="match-slot ${slot2Winner ? 'winner' : ''} ${!match.team2 || match.team2 === 'BYE' ? 'tbd' : ''}">`;
-      if (match.team2 === 'BYE') {
-        html += `<span>BYE</span>`;
-      } else if (match.team2) {
-        html += escHtml(match.team2);
-      } else {
-        html += `<span class="tbd">TBD</span>`;
-      }
-      html += `</div>`;
-
-      html += `</div>`; // .match
-      html += `</div>`; // .match-wrapper
-    });
-
-    html += `</div>`; // .round-col
-
-    // Connector between this round and next (skip after last round)
-    if (ri < totalRounds - 1) {
-      html += buildConnector(round.matches.length);
-    }
-  });
-
-  // Champion display
-  const lastRound = rounds[totalRounds - 1];
-  const champion = lastRound && lastRound.matches[0] ? lastRound.matches[0].winner : null;
-  html += `<div class="champion-col">
-    <div class="champion-box">
-      <div class="trophy">🏆</div>
-      <div class="champion-label">Champion</div>
-      ${champion
-        ? `<div class="champion-name">${escHtml(champion)}</div>`
-        : `<div class="champion-tbd">TBD</div>`
-      }
-    </div>
-  </div>`;
-
-  html += '</div>'; // .bracket
-
-  bracketArea.innerHTML = html;
-
-  // Attach click listeners to playable matches
-  bracketArea.querySelectorAll('.match.clickable').forEach(el => {
-    el.addEventListener('click', () => openPopover(el));
+  const controlsEnabled = t.settings?.presenterControlsEnabled !== false;
+  renderBracket(bracketArea, t, {
+    onMatchClick: controlsEnabled ? openPopover : null
   });
 }
 
-function buildConnector(matchCount) {
-  let html = `<div class="connector">`;
-  for (let i = 0; i < matchCount; i += 2) {
-    html += `<div class="connector-pair">
-      <div class="conn-top"></div>
-      <div class="conn-mid"></div>
-      <div class="conn-bottom"></div>
-    </div>`;
+// ── Info bar (countdown + registration cutoff) ──
+
+function renderInfo() {
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
   }
-  html += `</div>`;
-  return html;
+
+  const t = activeTournamentId ? tournaments.find(t => t.id === activeTournamentId) : null;
+
+  if (!t || (!t.settings?.startTime && !t.settings?.registrationCutoff)) {
+    presenterInfoEl.style.display = 'none';
+    return;
+  }
+
+  function update() {
+    const parts = [];
+
+    if (t.settings.startTime) {
+      const diff = new Date(t.settings.startTime) - Date.now();
+      if (diff > 0) {
+        const totalSec = Math.floor(diff / 1000);
+        const h = Math.floor(totalSec / 3600);
+        const m = Math.floor((totalSec % 3600) / 60);
+        const s = totalSec % 60;
+        const hh = h > 0 ? `${h}h ` : '';
+        const mm = String(m).padStart(2, '0');
+        const ss = String(s).padStart(2, '0');
+        parts.push(`<span class="countdown-badge">Starts in ${hh}${mm}:${ss}</span>`);
+      }
+    }
+
+    if (t.settings.registrationCutoff) {
+      const cutoff = new Date(t.settings.registrationCutoff);
+      const isPast = cutoff < new Date();
+      const timeStr = cutoff.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const dateStr = cutoff.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      parts.push(`<span class="cutoff-badge${isPast ? ' past' : ''}">Registration ${isPast ? 'closed' : `closes ${dateStr} at ${timeStr}`}</span>`);
+    }
+
+    if (parts.length > 0) {
+      presenterInfoEl.innerHTML = parts.join('');
+      presenterInfoEl.style.display = 'flex';
+    } else {
+      presenterInfoEl.style.display = 'none';
+    }
+  }
+
+  update();
+  if (t.settings?.startTime && new Date(t.settings.startTime) > new Date()) {
+    countdownInterval = setInterval(update, 1000);
+  }
 }
 
 // ── Winner popover ──
@@ -175,19 +133,20 @@ function buildConnector(matchCount) {
 function openPopover(matchEl) {
   const tournamentId = matchEl.dataset.tournament;
   const matchId = matchEl.dataset.match;
-  const team1 = matchEl.dataset.team1;
-  const team2 = matchEl.dataset.team2;
+  const team1Id = matchEl.dataset.team1Id;
+  const team1Name = matchEl.dataset.team1Name;
+  const team2Id = matchEl.dataset.team2Id;
+  const team2Name = matchEl.dataset.team2Name;
   const isSettled = matchEl.classList.contains('settled');
 
-  // Position popover near the match box
   const rect = matchEl.getBoundingClientRect();
   popoverEl.style.top = `${rect.bottom + 8}px`;
   popoverEl.style.left = `${rect.left}px`;
 
   const title = isSettled ? 'Change result' : 'Select winner';
   popoverEl.innerHTML = `<h4>${title}</h4>
-    <button class="popover-option" data-winner="${escAttr(team1)}">${escHtml(team1)}</button>
-    <button class="popover-option" data-winner="${escAttr(team2)}">${escHtml(team2)}</button>
+    <button class="popover-option" data-winner="${escAttr(team1Id)}">${escHtml(team1Name)}</button>
+    <button class="popover-option" data-winner="${escAttr(team2Id)}">${escHtml(team2Name)}</button>
     ${isSettled ? `<button class="popover-clear">Clear result</button>` : ''}`;
 
   popoverEl.querySelectorAll('.popover-option').forEach(btn => {
@@ -223,10 +182,9 @@ async function setWinner(tournamentId, matchId, winner) {
   });
   if (res.ok) {
     const updated = await res.json();
-    // Update in local state
     const idx = tournaments.findIndex(t => t.id === tournamentId);
     if (idx !== -1) tournaments[idx] = updated;
-    renderBracket();
+    renderCurrentBracket();
   }
 }
 
@@ -238,20 +196,6 @@ async function clearResult(tournamentId, matchId) {
     const updated = await res.json();
     const idx = tournaments.findIndex(t => t.id === tournamentId);
     if (idx !== -1) tournaments[idx] = updated;
-    renderBracket();
+    renderCurrentBracket();
   }
-}
-
-// ── Utils ──
-
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function escAttr(str) {
-  return String(str).replace(/"/g, '&quot;');
 }

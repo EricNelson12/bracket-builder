@@ -2,7 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { generateBracket, propagateWinner, resetFromMatch } = require('./lib/bracket');
+const { generateBracket, resetFromMatch, addMatchToRound } = require('./lib/bracket');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,6 +13,7 @@ app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'presenter.html')));
 app.get('/config', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/config/:id', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'tournament-config.html')));
 
 // --- Persistence helpers ---
 
@@ -23,17 +24,33 @@ if (!fs.existsSync(DATA_FILE)) {
 }
 
 function readData() {
-  return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  // Migration: ensure settings exists on all tournaments
+  data.tournaments.forEach(t => {
+    if (!t.settings) {
+      t.settings = { presenterControlsEnabled: true, startTime: null, registrationCutoff: null };
+    }
+  });
+  return data;
 }
 
 function writeData(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
+function toTeamObjects(names) {
+  return names.map((name, i) => ({
+    id: crypto.randomUUID(),
+    name,
+    seed: i + 1,
+    status: 'active'
+  }));
+}
+
 // --- Routes ---
 
 // GET /api/tournaments
-app.get('/api/tournaments', (req, res) => {
+app.get('/api/tournaments', (_req, res) => {
   const data = readData();
   res.json(data.tournaments);
 });
@@ -45,12 +62,14 @@ app.post('/api/tournaments', (req, res) => {
     return res.status(400).json({ error: 'Name and at least 2 teams are required.' });
   }
 
+  const teamObjects = toTeamObjects(teams);
   const data = readData();
   const tournament = {
     id: crypto.randomUUID(),
     name,
-    teams,
-    rounds: generateBracket(teams)
+    teams: teamObjects,
+    rounds: generateBracket(teamObjects),
+    settings: { presenterControlsEnabled: true, startTime: null, registrationCutoff: null }
   };
   data.tournaments.push(tournament);
   writeData(data);
@@ -67,9 +86,17 @@ app.delete('/api/tournaments/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// PUT /api/tournaments/:id — edit name and/or teams
+// GET /api/tournaments/:id — fetch single tournament
+app.get('/api/tournaments/:id', (req, res) => {
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Not found.' });
+  res.json(tournament);
+});
+
+// PUT /api/tournaments/:id — edit name, teams, and/or settings
 app.put('/api/tournaments/:id', (req, res) => {
-  const { name, teams } = req.body;
+  const { name, teams, settings } = req.body;
   const data = readData();
   const tournament = data.tournaments.find(t => t.id === req.params.id);
   if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
@@ -80,15 +107,20 @@ app.put('/api/tournaments/:id', (req, res) => {
     if (!Array.isArray(teams) || teams.length < 2) {
       return res.status(400).json({ error: 'At least 2 teams are required.' });
     }
-    tournament.teams = teams;
-    tournament.rounds = generateBracket(teams);
+    const teamObjects = toTeamObjects(teams);
+    tournament.teams = teamObjects;
+    tournament.rounds = generateBracket(teamObjects);
+  }
+
+  if (settings !== undefined) {
+    tournament.settings = { ...tournament.settings, ...settings };
   }
 
   writeData(data);
   res.json(tournament);
 });
 
-// DELETE /api/tournaments/:id/matches/:matchId — clear winner and propagate nulls upstream
+// DELETE /api/tournaments/:id/matches/:matchId — clear winner
 app.delete('/api/tournaments/:id/matches/:matchId', (req, res) => {
   const data = readData();
   const tournament = data.tournaments.find(t => t.id === req.params.id);
@@ -103,26 +135,266 @@ app.delete('/api/tournaments/:id/matches/:matchId', (req, res) => {
 
 // PUT /api/tournaments/:id/matches/:matchId — set (or change) winner
 app.put('/api/tournaments/:id/matches/:matchId', (req, res) => {
-  const { winner } = req.body;
+  const { winner, method } = req.body;
   if (!winner) return res.status(400).json({ error: 'winner is required.' });
 
   const data = readData();
   const tournament = data.tournaments.find(t => t.id === req.params.id);
   if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
 
-  // If match already has a winner, reset downstream before setting the new one
-  const existingMatch = tournament.rounds.flatMap(r => r.matches).find(m => m.id === req.params.matchId);
-  if (existingMatch && existingMatch.winner) {
-    resetFromMatch(tournament.rounds, req.params.matchId);
-  }
+  const validTeamId = tournament.teams.some(t => t.id === winner);
+  if (!validTeamId) return res.status(400).json({ error: 'Invalid team id.' });
 
-  const found = propagateWinner(tournament.rounds, req.params.matchId, winner);
-  if (!found) return res.status(404).json({ error: 'Match not found.' });
+  const match = tournament.rounds.flatMap(r => r.matches).find(m => m.id === req.params.matchId);
+  if (!match) return res.status(404).json({ error: 'Match not found.' });
+
+  match.result = { winner, method: method || null };
+  match.status = 'complete';
 
   writeData(data);
   res.json(tournament);
 });
 
+
+// PATCH /api/tournaments/:id/matches/:matchId/overrides — set or clear slot overrides
+app.patch('/api/tournaments/:id/matches/:matchId/overrides', (req, res) => {
+  const { team1Override, team2Override } = req.body;
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+  const match = tournament.rounds.flatMap(r => r.matches).find(m => m.id === req.params.matchId);
+  if (!match) return res.status(404).json({ error: 'Match not found.' });
+
+  if (team1Override !== undefined) {
+    if (team1Override !== null && !tournament.teams.some(t => t.id === team1Override)) {
+      return res.status(400).json({ error: 'Invalid team1Override.' });
+    }
+    match.team1Override = team1Override;
+  }
+  if (team2Override !== undefined) {
+    if (team2Override !== null && !tournament.teams.some(t => t.id === team2Override)) {
+      return res.status(400).json({ error: 'Invalid team2Override.' });
+    }
+    match.team2Override = team2Override;
+  }
+
+  writeData(data);
+  res.json(tournament);
+});
+
+// PATCH /api/tournaments/:id/teams/:teamId — update team name and/or status
+app.patch('/api/tournaments/:id/teams/:teamId', (req, res) => {
+  const { status, name } = req.body;
+
+  if (status !== undefined && !['active', 'dropped'].includes(status)) {
+    return res.status(400).json({ error: 'status must be "active" or "dropped".' });
+  }
+  if (name !== undefined && (!name || !name.trim())) {
+    return res.status(400).json({ error: 'Team name cannot be empty.' });
+  }
+
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+  const team = tournament.teams.find(t => t.id === req.params.teamId);
+  if (!team) return res.status(404).json({ error: 'Team not found.' });
+
+  if (status !== undefined) team.status = status;
+  if (name !== undefined) team.name = name.trim();
+
+  writeData(data);
+  res.json(tournament);
+});
+
+// DELETE /api/tournaments/:id/teams/:teamId — remove a team
+app.delete('/api/tournaments/:id/teams/:teamId', (req, res) => {
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+  const teamIndex = tournament.teams.findIndex(t => t.id === req.params.teamId);
+  if (teamIndex === -1) return res.status(404).json({ error: 'Team not found.' });
+
+  const { teamId } = req.params;
+  const allMatches = tournament.rounds.flatMap(r => r.matches);
+
+  // Block if the team appears in any match source, override, or result
+  const isReferenced = allMatches.some(m =>
+    m.team1Source?.teamId === teamId ||
+    m.team2Source?.teamId === teamId ||
+    m.team1Override === teamId ||
+    m.team2Override === teamId ||
+    m.result?.winner === teamId
+  );
+  if (isReferenced) {
+    return res.status(400).json({ error: 'Cannot delete a team that is referenced in the bracket. Regenerate the bracket first.' });
+  }
+
+  tournament.teams.splice(teamIndex, 1);
+  writeData(data);
+  res.json(tournament);
+});
+
+// POST /api/tournaments/:id/teams — add a team mid-event (no bracket regen)
+app.post('/api/tournaments/:id/teams', (req, res) => {
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Team name is required.' });
+
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+  const team = {
+    id: crypto.randomUUID(),
+    name: name.trim(),
+    seed: tournament.teams.length + 1,
+    status: 'active'
+  };
+  tournament.teams.push(team);
+  writeData(data);
+  res.status(201).json(tournament);
+});
+
+// POST /api/tournaments/:id/rounds/:roundIndex/matches — inject a match into a round
+app.post('/api/tournaments/:id/rounds/:roundIndex/matches', (req, res) => {
+  const { team1, team2 } = req.body;
+  const roundIndex = parseInt(req.params.roundIndex, 10);
+
+  if (!team1 || !team2) return res.status(400).json({ error: 'team1 and team2 are required.' });
+
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+  if (!tournament.teams.some(t => t.id === team1)) return res.status(400).json({ error: 'Invalid team1.' });
+  if (!tournament.teams.some(t => t.id === team2)) return res.status(400).json({ error: 'Invalid team2.' });
+
+  const match = addMatchToRound(tournament.rounds, roundIndex, team1, team2);
+  if (!match) return res.status(404).json({ error: 'Round not found.' });
+
+  writeData(data);
+  res.status(201).json(tournament);
+});
+
+// POST /api/tournaments/:id/rounds — append a new empty round
+app.post('/api/tournaments/:id/rounds', (req, res) => {
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+  tournament.rounds.push({ round: tournament.rounds.length + 1, matches: [] });
+  writeData(data);
+  res.status(201).json(tournament);
+});
+
+// POST /api/tournaments/:id/regenerate — rebuild bracket from current (non-dropped) teams
+app.post('/api/tournaments/:id/regenerate', (req, res) => {
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+  const activeTeams = tournament.teams.filter(t => t.status !== 'dropped');
+  if (activeTeams.length < 2) {
+    return res.status(400).json({ error: 'At least 2 active teams are required to generate a bracket.' });
+  }
+
+  tournament.rounds = generateBracket(activeTeams);
+  writeData(data);
+  res.json(tournament);
+});
+
+// PATCH /api/tournaments/:id/rounds/:roundIndex — rename a round
+app.patch('/api/tournaments/:id/rounds/:roundIndex', (req, res) => {
+  const roundIndex = parseInt(req.params.roundIndex, 10);
+  const { name } = req.body;
+
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+  const round = tournament.rounds[roundIndex];
+  if (!round) return res.status(404).json({ error: 'Round not found.' });
+
+  // null or empty string clears the custom name (falls back to computed name in UI)
+  round.name = (name && name.trim()) ? name.trim() : undefined;
+  if (round.name === undefined) delete round.name;
+
+  writeData(data);
+  res.json(tournament);
+});
+
+// DELETE /api/tournaments/:id/rounds/:roundIndex — remove a round
+app.delete('/api/tournaments/:id/rounds/:roundIndex', (req, res) => {
+  const roundIndex = parseInt(req.params.roundIndex, 10);
+
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+  const round = tournament.rounds[roundIndex];
+  if (!round) return res.status(404).json({ error: 'Round not found.' });
+
+  // Block if any match in this round has a result
+  if (round.matches.some(m => m.status === 'complete')) {
+    return res.status(400).json({ error: 'Cannot delete a round with completed matches.' });
+  }
+
+  // Block if any match in this round is referenced by matches in other rounds
+  const matchIdsInRound = new Set(round.matches.map(m => m.id));
+  const otherMatches = tournament.rounds
+    .filter((_, i) => i !== roundIndex)
+    .flatMap(r => r.matches);
+  const isReferenced = otherMatches.some(m =>
+    matchIdsInRound.has(m.team1Source?.matchId) ||
+    matchIdsInRound.has(m.team2Source?.matchId)
+  );
+  if (isReferenced) {
+    return res.status(400).json({ error: 'Cannot delete a round referenced by other rounds.' });
+  }
+
+  tournament.rounds.splice(roundIndex, 1);
+  // Re-number the round field on remaining rounds
+  tournament.rounds.forEach((r, i) => { r.round = i + 1; });
+
+  writeData(data);
+  res.json(tournament);
+});
+
+// DELETE /api/tournaments/:id/rounds/:roundIndex/matches/:matchId — remove an injected match
+app.delete('/api/tournaments/:id/rounds/:roundIndex/matches/:matchId', (req, res) => {
+  const roundIndex = parseInt(req.params.roundIndex, 10);
+  const { matchId } = req.params;
+
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+  const round = tournament.rounds[roundIndex];
+  if (!round) return res.status(404).json({ error: 'Round not found.' });
+
+  const matchIndex = round.matches.findIndex(m => m.id === matchId);
+  if (matchIndex === -1) return res.status(404).json({ error: 'Match not found.' });
+
+  const match = round.matches[matchIndex];
+  if (match.status !== 'pending') {
+    return res.status(400).json({ error: 'Cannot delete a completed match.' });
+  }
+
+  const allMatches = tournament.rounds.flatMap(r => r.matches);
+  const isReferenced = allMatches.some(m =>
+    m.id !== matchId &&
+    (m.team1Source?.matchId === matchId || m.team2Source?.matchId === matchId)
+  );
+  if (isReferenced) {
+    return res.status(400).json({ error: 'Cannot delete a match referenced by other matches.' });
+  }
+
+  round.matches.splice(matchIndex, 1);
+  writeData(data);
+  res.json(tournament);
+});
 
 app.listen(PORT, () => {
   console.log(`Bracket builder running at http://localhost:${PORT}`);

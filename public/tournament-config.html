@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tournament Config</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="tc-page">
+
+  <header class="tc-header">
+    <a href="/config" class="tc-back">&#x2190; All Tournaments</a>
+    <h1 id="tc-title">Loading&#x2026;</h1>
+    <div class="tc-header-actions">
+      <a href="/" target="_blank" class="btn-secondary btn-sm">Presenter &#x2192;</a>
+    </div>
+  </header>
+
+  <div class="tc-body">
+    <aside class="tc-sidebar" id="tc-sidebar">
+      <p class="empty-state">Loading&hellip;</p>
+    </aside>
+    <main class="tc-bracket-area" id="tc-bracket-area">
+      <p class="empty-state">Loading&hellip;</p>
+    </main>
+  </div>
+
+  <!-- Match editor / add-match overlay -->
+  <div class="me-overlay" id="me-overlay" style="display:none"></div>
+  <div class="match-editor-panel" id="match-editor" style="display:none"></div>
+
+  <script src="/js/bracket.js"></script>
+  <script src="/js/bracket-render.js"></script>
+  <script src="/js/tournament-config.js"></script>
+</body>
+</html>
