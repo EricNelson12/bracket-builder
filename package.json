@@ -1,0 +1,13 @@
+{
+  "name": "bracket-builder",
+  "version": "1.0.0",
+  "description": "Tournament bracket builder",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

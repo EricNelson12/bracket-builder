@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bracket Presenter</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="presenter-page">
+  <header class="presenter-header">
+    <div class="tabs" id="tabs"></div>
+  </header>
+
+  <main class="presenter-body" id="bracket-area">
+    <p class="no-tournaments">No tournaments yet. <a href="/">Create one</a>.</p>
+  </main>
+
+  <!-- Popover overlay (hidden by default) -->
+  <div class="popover-overlay" id="popover-overlay" style="display:none"></div>
+  <div class="popover" id="popover" style="display:none">
+    <h4>Select winner</h4>
+  </div>
+
+  <script src="/js/bracket.js"></script>
+  <script src="/js/presenter.js"></script>
+</body>
+</html>
