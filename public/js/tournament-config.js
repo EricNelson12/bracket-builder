@@ -79,6 +79,13 @@ function renderSidebar() {
           <span class="toggle-track"><span class="toggle-thumb"></span></span>
         </label>
       </div>
+      <div class="settings-row">
+        <label>Reg link</label>
+        <div style="display:flex;gap:4px;flex:1;min-width:0">
+          <input type="text" value="${escAttr(`${window.location.origin}/register/${tournamentId}`)}" readonly style="font-size:11px">
+          <button class="btn-secondary btn-xs" onclick="copyRegLink(this)">Copy</button>
+        </div>
+      </div>
     </div>
 
     <div class="sidebar-section">
@@ -86,7 +93,13 @@ function renderSidebar() {
       <ul class="tc-team-list">
         ${tournament.teams.map(t => `
           <li class="team-item${t.status === 'dropped' ? ' dropped' : ''}">
-            <input class="team-name-input" value="${escAttr(t.name)}" data-team-id="${escAttr(t.id)}" title="Rename team">
+            ${t.picture
+              ? `<img class="team-thumb" src="${escAttr(t.picture)}" alt="" loading="lazy">`
+              : '<span class="team-thumb-placeholder"></span>'}
+            <div class="team-item-details">
+              <input class="team-name-input" value="${escAttr(t.name)}" data-team-id="${escAttr(t.id)}" title="Rename team">
+              ${t.captain ? `<div class="team-captain">${escHtml(t.captain)}</div>` : ''}
+            </div>
             <span class="team-status-badge ${t.status === 'dropped' ? 'dropped' : 'active'}">${t.status === 'dropped' ? 'out' : 'in'}</span>
             <button class="btn-icon btn-xs" onclick="toggleTeamStatus('${escAttr(t.id)}', '${t.status === 'dropped' ? 'active' : 'dropped'}')" title="${t.status === 'dropped' ? 'Restore team' : 'Mark as dropped'}">
               ${t.status === 'dropped' ? '&#x21A9;' : '&#x2715;'}
@@ -572,6 +585,14 @@ async function clearDatetime(settingKey, fieldKey) {
   if (timeEl) { timeEl.value = ''; timeEl.disabled = true; }
   await patchSettings({ [settingKey]: null });
   renderSidebar();
+}
+
+function copyRegLink(btn) {
+  const url = `${window.location.origin}/register/${tournamentId}`;
+  navigator.clipboard.writeText(url).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  });
 }
 
 // ── Init ──

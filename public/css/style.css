@@ -1131,3 +1131,71 @@ input:focus, textarea:focus {
   margin-left: 4px;
   font-weight: 600;
 }
+
+/* ── Registration page ── */
+select {
+  background: #1a1d27;
+  border: 1px solid #2d3148;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 8px 12px;
+  font-size: 14px;
+  width: 100%;
+  cursor: pointer;
+}
+
+select:focus {
+  outline: none;
+  border-color: #4c6ef5;
+}
+
+/* ── Team thumbnails in config sidebar ── */
+.team-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.team-thumb-placeholder {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  background: #2d3148;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.team-item-details {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.team-captain {
+  font-size: 10px;
+  color: #4a5568;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 5px;
+}
+
+/* ── Registration link badge in presenter info bar ── */
+.reg-link-badge {
+  background: #1d3a4a;
+  color: #63b3ed;
+  border: 1px solid #2d5a7a;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 20px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.reg-link-badge:hover { background: #2d5a7a; }

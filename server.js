@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const multer = require('multer');
 const { generateBracket, resetFromMatch, addMatchToRound } = require('./lib/bracket');
 
 const app = express();
@@ -14,6 +15,8 @@ app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'presenter.html')));
 app.get('/config', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/config/:id', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'tournament-config.html')));
+app.get('/register', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'register.html')));
+app.get('/register/:id', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'register.html')));
 
 // --- Persistence helpers ---
 
@@ -22,6 +25,13 @@ fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
 if (!fs.existsSync(DATA_FILE)) {
   fs.writeFileSync(DATA_FILE, JSON.stringify({ tournaments: [] }, null, 2));
 }
+fs.mkdirSync(path.join(__dirname, 'public', 'uploads'), { recursive: true });
+
+const upload = multer({
+  dest: path.join(__dirname, 'public', 'uploads'),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(_req, file, cb) { cb(null, /^image\//.test(file.mimetype)); }
+});
 
 function readData() {
   const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
@@ -58,17 +68,18 @@ app.get('/api/tournaments', (_req, res) => {
 // POST /api/tournaments
 app.post('/api/tournaments', (req, res) => {
   const { name, teams } = req.body;
-  if (!name || !Array.isArray(teams) || teams.length < 2) {
-    return res.status(400).json({ error: 'Name and at least 2 teams are required.' });
+  if (!name) {
+    return res.status(400).json({ error: 'Tournament name is required.' });
   }
 
-  const teamObjects = toTeamObjects(teams);
+  const teamList = Array.isArray(teams) ? teams : [];
+  const teamObjects = toTeamObjects(teamList);
   const data = readData();
   const tournament = {
     id: crypto.randomUUID(),
     name,
     teams: teamObjects,
-    rounds: generateBracket(teamObjects),
+    rounds: teamObjects.length >= 2 ? generateBracket(teamObjects) : [],
     settings: { presenterControlsEnabled: true, startTime: null, registrationCutoff: null }
   };
   data.tournaments.push(tournament);
@@ -84,6 +95,21 @@ app.delete('/api/tournaments/:id', (req, res) => {
   data.tournaments.splice(index, 1);
   writeData(data);
   res.json({ ok: true });
+});
+
+// GET /api/tournaments/open — tournaments with registration open
+app.get('/api/tournaments/open', (_req, res) => {
+  const now = new Date();
+  const open = readData().tournaments.filter(t => {
+    const cutoff = t.settings?.registrationCutoff;
+    return !cutoff || new Date(cutoff) > now;
+  });
+  res.json(open.map(t => ({
+    id: t.id,
+    name: t.name,
+    teamCount: t.teams.length,
+    registrationCutoff: t.settings?.registrationCutoff || null
+  })));
 });
 
 // GET /api/tournaments/:id — fetch single tournament
@@ -104,12 +130,12 @@ app.put('/api/tournaments/:id', (req, res) => {
   if (name !== undefined) tournament.name = name;
 
   if (teams !== undefined) {
-    if (!Array.isArray(teams) || teams.length < 2) {
-      return res.status(400).json({ error: 'At least 2 teams are required.' });
+    if (!Array.isArray(teams)) {
+      return res.status(400).json({ error: 'teams must be an array.' });
     }
     const teamObjects = toTeamObjects(teams);
     tournament.teams = teamObjects;
-    tournament.rounds = generateBracket(teamObjects);
+    tournament.rounds = teamObjects.length >= 2 ? generateBracket(teamObjects) : [];
   }
 
   if (settings !== undefined) {
@@ -255,6 +281,36 @@ app.post('/api/tournaments/:id/teams', (req, res) => {
   tournament.teams.push(team);
   writeData(data);
   res.status(201).json(tournament);
+});
+
+// POST /api/tournaments/:id/register — public team registration (multipart/form-data)
+app.post('/api/tournaments/:id/register', upload.single('picture'), (req, res) => {
+  const { name, captain } = req.body;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Team name is required.' });
+  }
+
+  const data = readData();
+  const tournament = data.tournaments.find(t => t.id === req.params.id);
+  if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+  const cutoff = tournament.settings?.registrationCutoff;
+  if (cutoff && new Date(cutoff) < new Date()) {
+    return res.status(400).json({ error: 'Registration is closed.' });
+  }
+
+  const team = {
+    id: crypto.randomUUID(),
+    name: name.trim(),
+    seed: tournament.teams.length + 1,
+    status: 'active',
+    captain: captain ? captain.trim() : null,
+    picture: req.file ? `/uploads/${req.file.filename}` : null
+  };
+
+  tournament.teams.push(team);
+  writeData(data);
+  res.status(201).json({ ok: true, team });
 });
 
 // POST /api/tournaments/:id/rounds/:roundIndex/matches — inject a match into a round

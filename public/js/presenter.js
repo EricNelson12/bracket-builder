@@ -83,8 +83,9 @@ function renderInfo() {
   }
 
   const t = activeTournamentId ? tournaments.find(t => t.id === activeTournamentId) : null;
+  const hasNoBracket = !t?.rounds?.length;
 
-  if (!t || (!t.settings?.startTime && !t.settings?.registrationCutoff)) {
+  if (!t || (!t.settings?.startTime && !t.settings?.registrationCutoff && !hasNoBracket)) {
     presenterInfoEl.style.display = 'none';
     return;
   }
@@ -112,6 +113,12 @@ function renderInfo() {
       const timeStr = cutoff.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const dateStr = cutoff.toLocaleDateString([], { month: 'short', day: 'numeric' });
       parts.push(`<span class="cutoff-badge${isPast ? ' past' : ''}">Registration ${isPast ? 'closed' : `closes ${dateStr} at ${timeStr}`}</span>`);
+    }
+
+    const cutoffPast = t.settings.registrationCutoff && new Date(t.settings.registrationCutoff) < new Date();
+    if (!cutoffPast && (hasNoBracket || t.settings.registrationCutoff)) {
+      const regUrl = `${window.location.origin}/register/${t.id}`;
+      parts.push(`<span class="reg-link-badge" onclick="navigator.clipboard.writeText('${escAttr(regUrl)}')" title="Click to copy registration link">\uD83D\uDD17 Register &mdash; click to copy link</span>`);
     }
 
     if (parts.length > 0) {

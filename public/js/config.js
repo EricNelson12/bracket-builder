@@ -21,19 +21,22 @@ function parseTeams(raw) {
 }
 
 function updateHint(teams, hintEl) {
-  if (teams.length >= 2) {
+  if (teams.length === 0) {
+    hintEl.textContent = 'No teams — collect entries via registration.';
+  } else if (teams.length === 1) {
+    hintEl.textContent = '';
+  } else {
     const { size, byes } = bracketSizeInfo(teams.length);
     hintEl.textContent = byes === 0
       ? `${teams.length} teams → ${size}-team bracket`
       : `${teams.length} teams → ${size}-team bracket with ${byes} bye${byes !== 1 ? 's' : ''}`;
-  } else {
-    hintEl.textContent = '';
   }
 }
 
 teamsInput.addEventListener('input', () => {
   updateHint(parseTeams(teamsInput.value), bracketHint);
 });
+updateHint(parseTeams(teamsInput.value), bracketHint);
 
 document.getElementById('shuffle-btn').addEventListener('click', () => {
   const teams = parseTeams(teamsInput.value);
@@ -52,7 +55,6 @@ createBtn.addEventListener('click', async () => {
   const teams = parseTeams(teamsInput.value);
 
   if (!name) return showError('Please enter a tournament name.');
-  if (teams.length < 2) return showError('Please enter at least 2 teams.');
 
   const res = await fetch('/api/tournaments', {
     method: 'POST',
@@ -86,13 +88,19 @@ async function loadTournaments() {
 
   list.innerHTML = tournaments.map(t => {
     const totalTeams = t.teams.length;
-    const { size, byes } = bracketSizeInfo(totalTeams);
-    const byeNote = byes > 0 ? `, ${byes} bye${byes !== 1 ? 's' : ''}` : '';
+    let metaStr;
+    if (totalTeams < 2) {
+      metaStr = totalTeams === 0 ? 'No teams yet — registration open' : '1 team registered';
+    } else {
+      const { size, byes } = bracketSizeInfo(totalTeams);
+      const byeNote = byes > 0 ? `, ${byes} bye${byes !== 1 ? 's' : ''}` : '';
+      metaStr = `${totalTeams} teams, ${size}-team bracket${byeNote}`;
+    }
     return `
       <li data-id="${t.id}">
         <div>
           <div class="t-name">${escHtml(t.name)}</div>
-          <div class="t-meta">${totalTeams} teams, ${size}-team bracket${byeNote}</div>
+          <div class="t-meta">${metaStr}</div>
         </div>
         <div class="t-actions">
           <a class="btn-secondary btn-sm" href="/config/${t.id}">Edit</a>
