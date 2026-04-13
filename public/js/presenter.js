@@ -1,33 +1,39 @@
 const tabsEl = document.getElementById('tabs');
 const bracketArea = document.getElementById('bracket-area');
-const presenterInfoEl = document.getElementById('presenter-info');
 const popoverOverlay = document.getElementById('popover-overlay');
 const popoverEl = document.getElementById('popover');
 
 let tournaments = [];
 let activeTournamentId = null;
-let countdownInterval = null;
+
+// ── Utilities ──
+
+function escHtml(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function escAttr(str) {
+  if (str == null) return '';
+  return String(str).replace(/"/g, '&quot;');
+}
 
 // ── Data loading ──
 
 async function loadData() {
   const res = await fetch('/api/tournaments');
-  const fresh = await res.json();
-  const freshIds = fresh.map(t => t.id);
+  tournaments = await res.json();
 
-  tournaments = fresh;
-
+  const freshIds = tournaments.map(t => t.id);
   if (activeTournamentId && !freshIds.includes(activeTournamentId)) {
     activeTournamentId = null;
   }
-
   if (!activeTournamentId && tournaments.length > 0) {
     activeTournamentId = tournaments[0].id;
   }
 
   renderTabs();
   renderCurrentBracket();
-  renderInfo();
 }
 
 // Poll every 5 seconds
@@ -52,7 +58,6 @@ function renderTabs() {
       activeTournamentId = btn.dataset.id;
       renderTabs();
       renderCurrentBracket();
-      renderInfo();
     });
   });
 }
@@ -74,92 +79,39 @@ function renderCurrentBracket() {
   });
 }
 
-// ── Info bar (countdown + registration cutoff) ──
-
-function renderInfo() {
-  if (countdownInterval) {
-    clearInterval(countdownInterval);
-    countdownInterval = null;
-  }
-
-  const t = activeTournamentId ? tournaments.find(t => t.id === activeTournamentId) : null;
-  const hasNoBracket = !t?.rounds?.length;
-
-  if (!t || (!t.settings?.startTime && !t.settings?.registrationCutoff && !hasNoBracket)) {
-    presenterInfoEl.style.display = 'none';
-    return;
-  }
-
-  function update() {
-    const parts = [];
-
-    if (t.settings.startTime) {
-      const diff = new Date(t.settings.startTime) - Date.now();
-      if (diff > 0) {
-        const totalSec = Math.floor(diff / 1000);
-        const h = Math.floor(totalSec / 3600);
-        const m = Math.floor((totalSec % 3600) / 60);
-        const s = totalSec % 60;
-        const hh = h > 0 ? `${h}h ` : '';
-        const mm = String(m).padStart(2, '0');
-        const ss = String(s).padStart(2, '0');
-        parts.push(`<span class="countdown-badge">Starts in ${hh}${mm}:${ss}</span>`);
-      }
-    }
-
-    if (t.settings.registrationCutoff) {
-      const cutoff = new Date(t.settings.registrationCutoff);
-      const isPast = cutoff < new Date();
-      const timeStr = cutoff.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const dateStr = cutoff.toLocaleDateString([], { month: 'short', day: 'numeric' });
-      parts.push(`<span class="cutoff-badge${isPast ? ' past' : ''}">Registration ${isPast ? 'closed' : `closes ${dateStr} at ${timeStr}`}</span>`);
-    }
-
-    const cutoffPast = t.settings.registrationCutoff && new Date(t.settings.registrationCutoff) < new Date();
-    if (!cutoffPast && (hasNoBracket || t.settings.registrationCutoff)) {
-      const regUrl = `${window.location.origin}/register/${t.id}`;
-      parts.push(`<span class="reg-link-badge" onclick="navigator.clipboard.writeText('${escAttr(regUrl)}')" title="Click to copy registration link">\uD83D\uDD17 Register &mdash; click to copy link</span>`);
-    }
-
-    if (parts.length > 0) {
-      presenterInfoEl.innerHTML = parts.join('');
-      presenterInfoEl.style.display = 'flex';
-    } else {
-      presenterInfoEl.style.display = 'none';
-    }
-  }
-
-  update();
-  if (t.settings?.startTime && new Date(t.settings.startTime) > new Date()) {
-    countdownInterval = setInterval(update, 1000);
-  }
-}
-
 // ── Winner popover ──
 
 function openPopover(matchEl) {
-  const tournamentId = matchEl.dataset.tournament;
+  const tId = matchEl.dataset.tournament;
   const matchId = matchEl.dataset.match;
-  const team1Id = matchEl.dataset.team1Id;
-  const team1Name = matchEl.dataset.team1Name;
-  const team2Id = matchEl.dataset.team2Id;
-  const team2Name = matchEl.dataset.team2Name;
-  const isSettled = matchEl.classList.contains('settled');
+  const ri = parseInt(matchEl.dataset.roundIndex, 10);
+
+  const t = tournaments.find(x => x.id === tId);
+  const match = t?.rounds[ri]?.matches.find(m => m.id === matchId);
+  if (!match || match.competitors.length === 0) return;
+
+  const isSettled = match.winner !== null;
 
   const rect = matchEl.getBoundingClientRect();
-  popoverEl.style.top = `${rect.bottom + 8}px`;
-  popoverEl.style.left = `${rect.left}px`;
+  const top = Math.min(rect.bottom + 8, window.innerHeight - 200);
+  const left = Math.min(rect.left, window.innerWidth - 220);
+  popoverEl.style.top = `${top}px`;
+  popoverEl.style.left = `${left}px`;
 
-  const title = isSettled ? 'Change result' : 'Select winner';
-  popoverEl.innerHTML = `<h4>${title}</h4>
-    <button class="popover-option" data-winner="${escAttr(team1Id)}">${escHtml(team1Name)}</button>
-    <button class="popover-option" data-winner="${escAttr(team2Id)}">${escHtml(team2Name)}</button>
-    ${isSettled ? `<button class="popover-clear">Clear result</button>` : ''}`;
+  popoverEl.innerHTML = `
+    <h4>${isSettled ? 'Change winner' : 'Select winner'}</h4>
+    ${match.competitors.map(name => `
+      <button class="popover-option${name === match.winner ? ' active' : ''}" data-name="${escAttr(name)}">
+        ${escHtml(name)}
+      </button>
+    `).join('')}
+    ${isSettled ? `<button class="popover-clear">Clear winner</button>` : ''}
+  `;
 
   popoverEl.querySelectorAll('.popover-option').forEach(btn => {
     btn.addEventListener('click', async () => {
       closePopover();
-      await setWinner(tournamentId, matchId, btn.dataset.winner);
+      await setWinner(tId, ri, matchId, btn.dataset.name);
     });
   });
 
@@ -167,7 +119,7 @@ function openPopover(matchEl) {
   if (clearBtn) {
     clearBtn.addEventListener('click', async () => {
       closePopover();
-      await clearResult(tournamentId, matchId);
+      await setWinner(tId, ri, matchId, null);
     });
   }
 
@@ -181,27 +133,15 @@ function closePopover() {
   popoverEl.style.display = 'none';
 }
 
-async function setWinner(tournamentId, matchId, winner) {
-  const res = await fetch(`/api/tournaments/${tournamentId}/matches/${matchId}`, {
+async function setWinner(tId, roundIndex, matchId, winner) {
+  const res = await fetch(`/api/tournaments/${tId}/rounds/${roundIndex}/matches/${matchId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ winner })
   });
   if (res.ok) {
     const updated = await res.json();
-    const idx = tournaments.findIndex(t => t.id === tournamentId);
-    if (idx !== -1) tournaments[idx] = updated;
-    renderCurrentBracket();
-  }
-}
-
-async function clearResult(tournamentId, matchId) {
-  const res = await fetch(`/api/tournaments/${tournamentId}/matches/${matchId}`, {
-    method: 'DELETE'
-  });
-  if (res.ok) {
-    const updated = await res.json();
-    const idx = tournaments.findIndex(t => t.id === tournamentId);
+    const idx = tournaments.findIndex(t => t.id === tId);
     if (idx !== -1) tournaments[idx] = updated;
     renderCurrentBracket();
   }

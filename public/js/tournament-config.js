@@ -7,7 +7,10 @@ const matchEditorEl = document.getElementById('match-editor');
 const meOverlayEl = document.getElementById('me-overlay');
 
 let tournament = null;
-let saveSettingsTimer = null;
+let saveNameTimer = null;
+// Track which match is open in the editor so we can save-on-close
+let editorRoundIndex = null;
+let editorMatchId = null;
 
 // ── Load & render ──
 
@@ -23,27 +26,27 @@ async function loadTournament() {
   tcTitle.textContent = tournament.name;
   document.title = `${tournament.name} — Config`;
   renderSidebar();
-  renderBracketEditor();
+  renderBracketArea();
 }
 
-function renderBracketEditor() {
+function renderBracketArea() {
   if (!tournament) return;
-  if (tournament.rounds.length === 0) {
-    tcBracketArea.innerHTML = '<p class="empty-state">No rounds yet. Add a round in the sidebar.</p>';
-    return;
-  }
   renderBracket(tcBracketArea, tournament, {
     editable: true,
-    onMatchClick: openMatchEditor
+    onMatchClick: handleMatchClick
   });
+}
+
+function handleMatchClick(matchEl) {
+  const ri = parseInt(matchEl.dataset.roundIndex, 10);
+  const matchId = matchEl.dataset.match;
+  openMatchEditor(ri, matchId);
 }
 
 function renderSidebar() {
   if (!tournament) return;
   const settings = tournament.settings || {};
   const controlsEnabled = settings.presenterControlsEnabled !== false;
-  const startParts = settings.startTime ? splitDatetime(settings.startTime) : { date: '', time: '' };
-  const cutoffParts = settings.registrationCutoff ? splitDatetime(settings.registrationCutoff) : { date: '', time: '' };
 
   tcSidebar.innerHTML = `
     <div class="sidebar-section">
@@ -52,26 +55,6 @@ function renderSidebar() {
         <label>Name</label>
         <input type="text" id="setting-name" value="${escAttr(tournament.name)}">
       </div>
-      <div class="datetime-field">
-        <div class="datetime-label">
-          <label>Start time</label>
-          ${startParts.date ? `<button class="datetime-clear" onclick="clearDatetime('startTime', 'start')" title="Clear">&times;</button>` : ''}
-        </div>
-        <div class="datetime-inputs">
-          <input type="date" id="setting-start-date" value="${escAttr(startParts.date)}">
-          <input type="time" id="setting-start-time" value="${escAttr(startParts.time)}" ${!startParts.date ? 'disabled' : ''}>
-        </div>
-      </div>
-      <div class="datetime-field">
-        <div class="datetime-label">
-          <label>Reg cutoff</label>
-          ${cutoffParts.date ? `<button class="datetime-clear" onclick="clearDatetime('registrationCutoff', 'cutoff')" title="Clear">&times;</button>` : ''}
-        </div>
-        <div class="datetime-inputs">
-          <input type="date" id="setting-cutoff-date" value="${escAttr(cutoffParts.date)}">
-          <input type="time" id="setting-cutoff-time" value="${escAttr(cutoffParts.time)}" ${!cutoffParts.date ? 'disabled' : ''}>
-        </div>
-      </div>
       <div class="settings-row settings-row-toggle">
         <label>Presenter controls</label>
         <label class="toggle-switch">
@@ -79,45 +62,12 @@ function renderSidebar() {
           <span class="toggle-track"><span class="toggle-thumb"></span></span>
         </label>
       </div>
-      <div class="settings-row">
-        <label>Reg link</label>
-        <div style="display:flex;gap:4px;flex:1;min-width:0">
-          <input type="text" value="${escAttr(`${window.location.origin}/register/${tournamentId}`)}" readonly style="font-size:11px">
-          <button class="btn-secondary btn-xs" onclick="copyRegLink(this)">Copy</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="sidebar-section">
-      <h3>Teams</h3>
-      <ul class="tc-team-list">
-        ${tournament.teams.map(t => `
-          <li class="team-item${t.status === 'dropped' ? ' dropped' : ''}">
-            ${t.picture
-              ? `<img class="team-thumb" src="${escAttr(t.picture)}" alt="" loading="lazy">`
-              : '<span class="team-thumb-placeholder"></span>'}
-            <div class="team-item-details">
-              <input class="team-name-input" value="${escAttr(t.name)}" data-team-id="${escAttr(t.id)}" title="Rename team">
-              ${t.captain ? `<div class="team-captain">${escHtml(t.captain)}</div>` : ''}
-            </div>
-            <span class="team-status-badge ${t.status === 'dropped' ? 'dropped' : 'active'}">${t.status === 'dropped' ? 'out' : 'in'}</span>
-            <button class="btn-icon btn-xs" onclick="toggleTeamStatus('${escAttr(t.id)}', '${t.status === 'dropped' ? 'active' : 'dropped'}')" title="${t.status === 'dropped' ? 'Restore team' : 'Mark as dropped'}">
-              ${t.status === 'dropped' ? '&#x21A9;' : '&#x2715;'}
-            </button>
-            <button class="btn-icon btn-xs team-delete-btn" onclick="deleteTeam('${escAttr(t.id)}', '${escAttr(t.name)}')" title="Delete team">&#x1F5D1;</button>
-          </li>
-        `).join('')}
-      </ul>
-      <div class="add-team-form">
-        <input type="text" id="add-team-input" placeholder="New team name">
-        <button class="btn-primary btn-sm" onclick="addTeam()">Add</button>
-      </div>
     </div>
 
     <div class="sidebar-section">
       <h3>Rounds</h3>
       ${tournament.rounds.length === 0
-        ? '<p style="font-size:12px;color:#718096;margin-bottom:8px">No rounds yet.</p>'
+        ? '<p class="sidebar-empty">No rounds yet.</p>'
         : tournament.rounds.map((round, ri) => `
           <div class="round-section">
             <div class="round-section-header">
@@ -125,73 +75,41 @@ function renderSidebar() {
                 value="${escAttr(round.name || roundName(ri, tournament.rounds.length))}"
                 data-round-index="${ri}"
                 data-computed="${escAttr(roundName(ri, tournament.rounds.length))}"
+                placeholder="${escAttr(roundName(ri, tournament.rounds.length))}"
                 title="Rename round">
               <div class="round-section-actions">
-                <button class="btn-secondary btn-xs" onclick="openAddMatchDialog(${ri})" title="Add match">+ Match</button>
-                <button class="btn-icon btn-xs round-delete-btn" onclick="removeRound(${ri})" title="Remove round">&#x1F5D1;</button>
+                <button class="btn-secondary btn-xs" data-add-match="${ri}">+ Match</button>
+                <button class="btn-icon btn-xs round-delete-btn" data-remove-round="${ri}" title="Remove round">&#x1F5D1;</button>
               </div>
             </div>
           </div>
         `).join('')
       }
-      <button class="btn-secondary btn-sm tc-add-round" onclick="addRound()">+ Add Round</button>
-      <button class="btn-regenerate" onclick="regenerateBracket()">Regenerate bracket</button>
+      <button class="btn-secondary btn-sm tc-add-round" id="add-round-btn">+ Add Round</button>
     </div>
   `;
 
-  // Settings event listeners
-  document.getElementById('setting-name').addEventListener('change', e => {
-    scheduleSave('name', e.target.value.trim());
+  // Settings listeners
+  document.getElementById('setting-name').addEventListener('input', e => {
+    clearTimeout(saveNameTimer);
+    saveNameTimer = setTimeout(() => saveName(e.target.value.trim()), 600);
   });
-  // Split date+time field listeners
-  ['start', 'cutoff'].forEach(key => {
-    const settingKey = key === 'start' ? 'startTime' : 'registrationCutoff';
-    const dateEl = document.getElementById(`setting-${key}-date`);
-    const timeEl = document.getElementById(`setting-${key}-time`);
-
-    dateEl.addEventListener('change', () => {
-      if (dateEl.value) {
-        timeEl.disabled = false;
-        if (!timeEl.value) timeEl.value = '12:00';
-      } else {
-        timeEl.disabled = true;
-        timeEl.value = '';
-      }
-      saveDatetime(settingKey, dateEl.value, timeEl.value);
-      renderSidebar(); // refresh clear button visibility
-    });
-    timeEl.addEventListener('change', () => {
-      saveDatetime(settingKey, dateEl.value, timeEl.value);
-    });
+  document.getElementById('setting-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') e.target.blur();
   });
   document.getElementById('setting-controls').addEventListener('change', e => {
     patchSettings({ presenterControlsEnabled: e.target.checked });
   });
 
-  // Team rename listeners
-  tcSidebar.querySelectorAll('.team-name-input').forEach(input => {
-    const originalValue = input.value;
-    input.addEventListener('change', e => {
-      const name = e.target.value.trim();
-      if (!name) { e.target.value = originalValue; return; }
-      renameTeam(e.target.dataset.teamId, name);
-    });
-    input.addEventListener('keydown', e => {
-      if (e.key === 'Enter') e.target.blur();
-      if (e.key === 'Escape') {
-        e.target.value = originalValue;
-        e.target.blur();
-      }
-    });
-  });
+  // Add round
+  document.getElementById('add-round-btn').addEventListener('click', addRound);
 
-  // Round rename listeners
+  // Round name inputs
   tcSidebar.querySelectorAll('.round-name-input').forEach(input => {
     input.addEventListener('change', e => {
       const ri = parseInt(e.target.dataset.roundIndex, 10);
       const val = e.target.value.trim();
       const computed = e.target.dataset.computed;
-      // Treat restoring the computed name as clearing the custom name
       renameRound(ri, val === computed ? '' : val);
     });
     input.addEventListener('keydown', e => {
@@ -204,25 +122,32 @@ function renderSidebar() {
       }
     });
   });
+
+  // Add match buttons
+  tcSidebar.querySelectorAll('[data-add-match]').forEach(btn => {
+    btn.addEventListener('click', () => addMatch(parseInt(btn.dataset.addMatch, 10)));
+  });
+
+  // Remove round buttons
+  tcSidebar.querySelectorAll('[data-remove-round]').forEach(btn => {
+    btn.addEventListener('click', () => removeRound(parseInt(btn.dataset.removeRound, 10)));
+  });
 }
 
 // ── Settings persistence ──
 
-function scheduleSave(key, value) {
-  clearTimeout(saveSettingsTimer);
-  saveSettingsTimer = setTimeout(() => {
-    if (key === 'name') {
-      fetch(`/api/tournaments/${tournamentId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: value })
-      }).then(r => r.ok ? r.json() : null).then(t => {
-        if (t) { tournament = t; tcTitle.textContent = t.name; document.title = `${t.name} — Config`; }
-      });
-    } else {
-      patchSettings({ [key]: value });
-    }
-  }, 600);
+async function saveName(name) {
+  if (!name) return;
+  const res = await fetch(`/api/tournaments/${tournamentId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  });
+  if (res.ok) {
+    tournament = await res.json();
+    tcTitle.textContent = tournament.name;
+    document.title = `${tournament.name} — Config`;
+  }
 }
 
 async function patchSettings(patch) {
@@ -234,78 +159,7 @@ async function patchSettings(patch) {
   if (res.ok) tournament = await res.json();
 }
 
-// ── Team management ──
-
-async function deleteTeam(teamId, teamName) {
-  if (!confirm(`Delete "${teamName}"? This cannot be undone.`)) return;
-  const res = await fetch(`/api/tournaments/${tournamentId}/teams/${teamId}`, { method: 'DELETE' });
-  if (res.ok) {
-    tournament = await res.json();
-    renderSidebar();
-    renderBracketEditor();
-  } else {
-    const err = await res.json();
-    alert(err.error || 'Could not delete team.');
-  }
-}
-
-async function renameTeam(teamId, name) {
-  const res = await fetch(`/api/tournaments/${tournamentId}/teams/${teamId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name })
-  });
-  if (res.ok) {
-    tournament = await res.json();
-    renderBracketEditor();
-  }
-}
-
-async function toggleTeamStatus(teamId, newStatus) {
-  const res = await fetch(`/api/tournaments/${tournamentId}/teams/${teamId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: newStatus })
-  });
-  if (res.ok) {
-    tournament = await res.json();
-    renderSidebar();
-    renderBracketEditor();
-  }
-}
-
-async function addTeam() {
-  const input = document.getElementById('add-team-input');
-  const name = input.value.trim();
-  if (!name) return;
-  const res = await fetch(`/api/tournaments/${tournamentId}/teams`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name })
-  });
-  if (res.ok) {
-    tournament = await res.json();
-    input.value = '';
-    renderSidebar();
-  }
-}
-
 // ── Round management ──
-
-async function regenerateBracket() {
-  const activeCount = tournament.teams.filter(t => t.status !== 'dropped').length;
-  const msg = `Regenerate the bracket from all ${activeCount} active team${activeCount !== 1 ? 's' : ''}?\n\nThis will clear all results and remove any manually added rounds or matches.`;
-  if (!confirm(msg)) return;
-  const res = await fetch(`/api/tournaments/${tournamentId}/regenerate`, { method: 'POST' });
-  if (res.ok) {
-    tournament = await res.json();
-    renderSidebar();
-    renderBracketEditor();
-  } else {
-    const err = await res.json();
-    alert(err.error || 'Could not regenerate bracket.');
-  }
-}
 
 async function addRound() {
   const res = await fetch(`/api/tournaments/${tournamentId}/rounds`, {
@@ -316,7 +170,7 @@ async function addRound() {
   if (res.ok) {
     tournament = await res.json();
     renderSidebar();
-    renderBracketEditor();
+    renderBracketArea();
   }
 }
 
@@ -328,7 +182,7 @@ async function renameRound(roundIndex, name) {
   });
   if (res.ok) {
     tournament = await res.json();
-    renderBracketEditor(); // update label in bracket view
+    renderBracketArea();
   }
 }
 
@@ -343,256 +197,199 @@ async function removeRound(roundIndex) {
   if (res.ok) {
     tournament = await res.json();
     renderSidebar();
-    renderBracketEditor();
+    renderBracketArea();
   } else {
     const err = await res.json();
     alert(err.error || 'Could not remove round.');
   }
 }
 
-function openAddMatchDialog(roundIndex) {
-  const options = tournament.teams
-    .map(t => `<option value="${escAttr(t.id)}">${escHtml(t.name)}${t.status === 'dropped' ? ' (dropped)' : ''}</option>`)
-    .join('');
+// ── Match management ──
 
-  matchEditorEl.innerHTML = `
-    <div class="editor-header">
-      <h3>Add Match — ${escHtml(roundName(roundIndex, tournament.rounds.length))}</h3>
-      <button class="editor-close" onclick="closeMatchEditor()">&#x2715;</button>
-    </div>
-    <div class="editor-section">
-      <div class="settings-row">
-        <label>Team 1</label>
-        <select id="add-match-t1" class="editor-select">${options}</select>
-      </div>
-      <div class="settings-row">
-        <label>Team 2</label>
-        <select id="add-match-t2" class="editor-select">${options}</select>
-      </div>
-    </div>
-    <div class="editor-actions">
-      <button class="btn-secondary" onclick="closeMatchEditor()">Cancel</button>
-      <button class="btn-primary" onclick="submitAddMatch(${roundIndex})">Add Match</button>
-    </div>
-  `;
-
-  showMatchEditorOverlay();
-}
-
-async function submitAddMatch(roundIndex) {
-  const team1 = document.getElementById('add-match-t1').value;
-  const team2 = document.getElementById('add-match-t2').value;
-  if (team1 === team2) {
-    alert('Please select two different teams.');
-    return;
-  }
-  closeMatchEditor();
+async function addMatch(roundIndex) {
   const res = await fetch(`/api/tournaments/${tournamentId}/rounds/${roundIndex}/matches`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ team1, team2 })
+    body: JSON.stringify({ competitors: [] })
   });
-  if (res.ok) {
-    tournament = await res.json();
-    renderSidebar();
-    renderBracketEditor();
-  }
-}
-
-// ── Match editor ──
-
-function openMatchEditor(matchEl) {
-  const matchId = matchEl.dataset.match;
-  const allMatches = tournament.rounds.flatMap(r => r.matches);
-  const tm = Object.fromEntries(tournament.teams.map(t => [t.id, t]));
-  const match = allMatches.find(m => m.id === matchId);
-  if (!match) return;
-
-  const roundIndex = tournament.rounds.findIndex(r => r.matches.some(m => m.id === matchId));
-
-  const team1 = resolveTeam(match.team1Source, match.team1Override, allMatches, tm);
-  const team2 = resolveTeam(match.team2Source, match.team2Override, allMatches, tm);
-  const isSettled = !!match.result;
-  const isBye = isByeMatch(match, allMatches, tm);
-
-  const canPickWinner = team1 && team1.id !== 'BYE' && team2 && team2.id !== 'BYE';
-
-  const winnerSection = canPickWinner ? `
-    <div class="editor-section">
-      <h4>${isSettled ? 'Change result' : 'Set winner'}</h4>
-      <button class="editor-winner-btn${isSettled && match.result.winner === team1.id ? ' active' : ''}"
-        onclick="setMatchWinner('${escAttr(matchId)}', '${escAttr(team1.id)}')">
-        ${escHtml(team1.name)}${team1.status === 'dropped' ? ' <span class="dropped-badge">dropped</span>' : ''}
-      </button>
-      <button class="editor-winner-btn${isSettled && match.result.winner === team2.id ? ' active' : ''}"
-        onclick="setMatchWinner('${escAttr(matchId)}', '${escAttr(team2.id)}')">
-        ${escHtml(team2.name)}${team2.status === 'dropped' ? ' <span class="dropped-badge">dropped</span>' : ''}
-      </button>
-      ${isSettled ? `<button class="editor-clear-btn" onclick="clearMatchResult('${escAttr(matchId)}')">Clear result</button>` : ''}
-    </div>` : (isSettled && !isBye ? `
-    <div class="editor-section">
-      <button class="editor-clear-btn" onclick="clearMatchResult('${escAttr(matchId)}')">Clear result</button>
-    </div>` : '');
-
-  const t1OverrideOpts = makeOverrideOpts(tournament.teams, match.team1Override);
-  const t2OverrideOpts = makeOverrideOpts(tournament.teams, match.team2Override);
-  const hasOverrides = match.team1Override || match.team2Override;
-
-  matchEditorEl.innerHTML = `
-    <div class="editor-header">
-      <h3>Match ${escHtml(matchId)}</h3>
-      <button class="editor-close" onclick="closeMatchEditor()">&#x2715;</button>
-    </div>
-    ${winnerSection}
-    <div class="editor-section">
-      <h4>Slot overrides</h4>
-      <div class="settings-row">
-        <label>Slot 1</label>
-        <select id="override-t1" class="editor-select">
-          <option value=""${!match.team1Override ? ' selected' : ''}>&#x2014; bracket source &#x2014;</option>
-          ${t1OverrideOpts}
-        </select>
-      </div>
-      <div class="settings-row">
-        <label>Slot 2</label>
-        <select id="override-t2" class="editor-select">
-          <option value=""${!match.team2Override ? ' selected' : ''}>&#x2014; bracket source &#x2014;</option>
-          ${t2OverrideOpts}
-        </select>
-      </div>
-      <div class="editor-actions-row">
-        <button class="btn-primary btn-sm" onclick="applyOverrides('${escAttr(matchId)}')">Apply</button>
-        ${hasOverrides ? `<button class="editor-clear-btn btn-sm" onclick="clearOverrides('${escAttr(matchId)}')">Clear overrides</button>` : ''}
-      </div>
-    </div>
-    ${!isSettled ? `
-    <div class="editor-section editor-danger-section">
-      <button class="editor-remove-match-btn" onclick="removeMatch(${roundIndex}, '${escAttr(matchId)}')">Remove match</button>
-    </div>` : ''}
-  `;
-
-  showMatchEditorOverlay();
-}
-
-function makeOverrideOpts(teams, currentOverride) {
-  return teams.map(t =>
-    `<option value="${escAttr(t.id)}"${t.id === currentOverride ? ' selected' : ''}>${escHtml(t.name)}${t.status === 'dropped' ? ' (dropped)' : ''}</option>`
-  ).join('');
-}
-
-function showMatchEditorOverlay() {
-  meOverlayEl.style.display = 'block';
-  matchEditorEl.style.display = 'block';
-  meOverlayEl.onclick = closeMatchEditor;
-}
-
-function closeMatchEditor() {
-  meOverlayEl.style.display = 'none';
-  matchEditorEl.style.display = 'none';
-}
-
-async function setMatchWinner(matchId, winnerId) {
-  closeMatchEditor();
-  const res = await fetch(`/api/tournaments/${tournamentId}/matches/${matchId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ winner: winnerId })
-  });
-  if (res.ok) {
-    tournament = await res.json();
-    renderBracketEditor();
-  }
-}
-
-async function clearMatchResult(matchId) {
-  closeMatchEditor();
-  const res = await fetch(`/api/tournaments/${tournamentId}/matches/${matchId}`, {
-    method: 'DELETE'
-  });
-  if (res.ok) {
-    tournament = await res.json();
-    renderBracketEditor();
-  }
-}
-
-async function applyOverrides(matchId) {
-  const t1 = document.getElementById('override-t1').value || null;
-  const t2 = document.getElementById('override-t2').value || null;
-  closeMatchEditor();
-  const res = await fetch(`/api/tournaments/${tournamentId}/matches/${matchId}/overrides`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ team1Override: t1, team2Override: t2 })
-  });
-  if (res.ok) {
-    tournament = await res.json();
-    renderBracketEditor();
-  }
+  if (!res.ok) return;
+  tournament = await res.json();
+  renderSidebar();
+  renderBracketArea();
+  // Open editor on the newly created match
+  const round = tournament.rounds[roundIndex];
+  const newMatch = round.matches[round.matches.length - 1];
+  if (newMatch) openMatchEditor(roundIndex, newMatch.id);
 }
 
 async function removeMatch(roundIndex, matchId) {
-  closeMatchEditor();
+  closeMatchEditor(false); // close without saving
   const res = await fetch(`/api/tournaments/${tournamentId}/rounds/${roundIndex}/matches/${matchId}`, {
     method: 'DELETE'
   });
   if (res.ok) {
     tournament = await res.json();
     renderSidebar();
-    renderBracketEditor();
+    renderBracketArea();
   } else {
     const err = await res.json();
     alert(err.error || 'Could not remove match.');
   }
 }
 
-async function clearOverrides(matchId) {
-  closeMatchEditor();
-  const res = await fetch(`/api/tournaments/${tournamentId}/matches/${matchId}/overrides`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ team1Override: null, team2Override: null })
+// ── Match editor ──
+
+function openMatchEditor(roundIndex, matchId) {
+  const round = tournament.rounds[roundIndex];
+  if (!round) return;
+  const match = round.matches.find(m => m.id === matchId);
+  if (!match) return;
+
+  editorRoundIndex = roundIndex;
+  editorMatchId = matchId;
+
+  renderMatchEditor(match, roundIndex);
+  meOverlayEl.style.display = 'block';
+  matchEditorEl.style.display = 'block';
+  meOverlayEl.onclick = () => closeMatchEditor(true);
+
+  // Focus first input
+  const first = matchEditorEl.querySelector('.competitor-input');
+  if (first) setTimeout(() => first.focus(), 50);
+}
+
+function renderMatchEditor(match, roundIndex) {
+  const competitors = match.competitors.length > 0 ? match.competitors : ['', ''];
+
+  matchEditorEl.innerHTML = `
+    <div class="editor-header">
+      <h3>Edit Match</h3>
+      <button class="editor-close" id="editor-close-btn">&#x2715;</button>
+    </div>
+    <div class="editor-section">
+      <h4>Competitors</h4>
+      <div id="competitor-list">
+        ${competitors.map((name, i) => renderCompetitorRow(name, i)).join('')}
+      </div>
+      <button class="btn-secondary btn-sm" id="add-competitor-btn">+ Add Competitor</button>
+    </div>
+    <div class="editor-section">
+      <h4>Winner</h4>
+      <select id="winner-select" class="editor-select">
+        <option value="">— no winner —</option>
+        ${match.competitors.filter(Boolean).map(name =>
+          `<option value="${escAttr(name)}"${name === match.winner ? ' selected' : ''}>${escHtml(name)}</option>`
+        ).join('')}
+      </select>
+    </div>
+    <div class="editor-section editor-danger-section">
+      <button class="editor-remove-match-btn" id="remove-match-btn">Remove match</button>
+    </div>
+  `;
+
+  // Wire up events
+  document.getElementById('editor-close-btn').addEventListener('click', () => closeMatchEditor(true));
+
+  document.getElementById('add-competitor-btn').addEventListener('click', () => {
+    const list = document.getElementById('competitor-list');
+    const idx = list.querySelectorAll('.competitor-row').length;
+    const row = document.createElement('div');
+    row.innerHTML = renderCompetitorRow('', idx);
+    list.appendChild(row.firstElementChild);
+    wireCompetitorRow(list.lastElementChild);
+    list.lastElementChild.querySelector('.competitor-input').focus();
+    rebuildWinnerDropdown();
   });
-  if (res.ok) {
-    tournament = await res.json();
-    renderBracketEditor();
+
+  document.getElementById('remove-match-btn').addEventListener('click', () => {
+    if (confirm('Remove this match?')) {
+      removeMatch(editorRoundIndex, editorMatchId);
+    }
+  });
+
+  matchEditorEl.querySelectorAll('.competitor-row').forEach(row => wireCompetitorRow(row));
+}
+
+function renderCompetitorRow(name, index) {
+  return `<div class="competitor-row" data-index="${index}">
+    <input type="text" class="competitor-input" value="${escAttr(name)}" placeholder="Competitor name">
+    <button class="competitor-remove-btn" title="Remove">&#x2715;</button>
+  </div>`;
+}
+
+function wireCompetitorRow(row) {
+  row.querySelector('.competitor-input').addEventListener('input', rebuildWinnerDropdown);
+  row.querySelector('.competitor-remove-btn').addEventListener('click', () => {
+    row.remove();
+    rebuildWinnerDropdown();
+  });
+}
+
+function rebuildWinnerDropdown() {
+  const select = document.getElementById('winner-select');
+  if (!select) return;
+  const currentWinner = select.value;
+  const names = getCompetitorNames();
+  select.innerHTML = `<option value="">— no winner —</option>`
+    + names.map(name =>
+        `<option value="${escAttr(name)}"${name === currentWinner ? ' selected' : ''}>${escHtml(name)}</option>`
+      ).join('');
+}
+
+function getCompetitorNames() {
+  return [...matchEditorEl.querySelectorAll('.competitor-input')]
+    .map(i => i.value.trim())
+    .filter(Boolean);
+}
+
+function collectEditorState() {
+  const competitors = getCompetitorNames();
+  const winnerSelect = document.getElementById('winner-select');
+  const winner = winnerSelect ? winnerSelect.value : '';
+  return {
+    competitors,
+    winner: competitors.includes(winner) ? winner : null
+  };
+}
+
+async function closeMatchEditor(save = true) {
+  if (save && editorMatchId !== null) {
+    const { competitors, winner } = collectEditorState();
+    await fetch(`/api/tournaments/${tournamentId}/rounds/${editorRoundIndex}/matches/${editorMatchId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ competitors, winner })
+    });
+    const res = await fetch(`/api/tournaments/${tournamentId}`);
+    if (res.ok) tournament = await res.json();
   }
+
+  editorRoundIndex = null;
+  editorMatchId = null;
+  meOverlayEl.style.display = 'none';
+  matchEditorEl.style.display = 'none';
+  renderSidebar();
+  renderBracketArea();
 }
 
 // ── Utilities ──
 
-function splitDatetime(isoStr) {
-  const d = new Date(isoStr);
-  const pad = n => String(n).padStart(2, '0');
-  return {
-    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
-    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`
-  };
+function escHtml(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function saveDatetime(settingKey, dateVal, timeVal) {
-  if (!dateVal) {
-    patchSettings({ [settingKey]: null });
-    return;
-  }
-  const iso = new Date(`${dateVal}T${timeVal || '00:00'}`).toISOString();
-  patchSettings({ [settingKey]: iso });
+function escAttr(str) {
+  if (str == null) return '';
+  return String(str).replace(/"/g, '&quot;');
 }
 
-async function clearDatetime(settingKey, fieldKey) {
-  const dateEl = document.getElementById(`setting-${fieldKey}-date`);
-  const timeEl = document.getElementById(`setting-${fieldKey}-time`);
-  if (dateEl) { dateEl.value = ''; }
-  if (timeEl) { timeEl.value = ''; timeEl.disabled = true; }
-  await patchSettings({ [settingKey]: null });
-  renderSidebar();
-}
-
-function copyRegLink(btn) {
-  const url = `${window.location.origin}/register/${tournamentId}`;
-  navigator.clipboard.writeText(url).then(() => {
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-  });
+function roundName(roundIndex, totalRounds) {
+  const remaining = totalRounds - roundIndex;
+  if (remaining === 1) return 'Final';
+  if (remaining === 2) return 'Semifinals';
+  if (remaining === 3) return 'Quarterfinals';
+  return `Round ${roundIndex + 1}`;
 }
 
 // ── Init ──
