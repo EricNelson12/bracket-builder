@@ -23,6 +23,7 @@ if (!fs.existsSync(DATA_FILE)) {
 
 function readData() {
   const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  if (!('activeTournamentId' in data)) data.activeTournamentId = null;
   data.tournaments.forEach(t => {
     if (!t.settings) t.settings = { presenterControlsEnabled: true };
   });
@@ -93,8 +94,33 @@ app.delete('/api/tournaments/:id', (req, res) => {
   const index = data.tournaments.findIndex(t => t.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Not found.' });
   data.tournaments.splice(index, 1);
+  if (data.activeTournamentId === req.params.id) data.activeTournamentId = null;
   writeData(data);
   res.json({ ok: true });
+});
+
+// GET /api/active
+app.get('/api/active', (_req, res) => {
+  const data = readData();
+  const t = data.activeTournamentId
+    ? data.tournaments.find(x => x.id === data.activeTournamentId) || null
+    : null;
+  res.json({ activeTournamentId: data.activeTournamentId, tournament: t });
+});
+
+// PUT /api/active
+app.put('/api/active', (req, res) => {
+  const { tournamentId } = req.body;
+  const data = readData();
+  if (tournamentId !== null && !data.tournaments.find(t => t.id === tournamentId)) {
+    return res.status(404).json({ error: 'Tournament not found.' });
+  }
+  data.activeTournamentId = tournamentId || null;
+  writeData(data);
+  const t = data.activeTournamentId
+    ? data.tournaments.find(x => x.id === data.activeTournamentId)
+    : null;
+  res.json({ activeTournamentId: data.activeTournamentId, tournament: t });
 });
 
 // --- Round routes ---

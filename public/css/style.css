@@ -153,6 +153,23 @@ select { cursor: pointer; }
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+  align-items: center;
+}
+
+.active-tournament .t-name { color: #68d391; }
+
+.active-badge {
+  font-size: 10px;
+  font-weight: 600;
+  background: #1d4a2f;
+  color: #68d391;
+  border: 1px solid #2d6a45;
+  border-radius: 10px;
+  padding: 1px 7px;
+  margin-left: 8px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: .04em;
 }
 
 .empty-state {
@@ -176,46 +193,27 @@ select { cursor: pointer; }
   overflow: hidden;
 }
 
-.presenter-header {
-  background: #1a1d27;
-  border-bottom: 1px solid #2d3148;
-  padding: 12px 24px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.tabs {
-  display: flex;
-  gap: 4px;
-  overflow-x: auto;
-  flex: 1;
-}
-
-.tab {
-  background: transparent;
-  border: 1px solid #2d3148;
-  border-radius: 6px;
-  color: #a0aec0;
-  padding: 6px 16px;
-  font-size: 13px;
-  white-space: nowrap;
-  transition: background .15s, color .15s;
-}
-
-.tab:hover { background: #2d3148; color: #e2e8f0; }
-
-.tab.active {
-  background: #4c6ef5;
-  border-color: #4c6ef5;
-  color: #fff;
-}
 
 .presenter-body {
   flex: 1;
   overflow: auto;
-  padding: 32px;
+  padding: 48px 32px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.bracket-title {
+  font-size: 32px;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 40px;
+  letter-spacing: -0.02em;
+}
+
+.bracket-scroll {
+  display: flex;
+  justify-content: center;
 }
 
 .no-tournaments {

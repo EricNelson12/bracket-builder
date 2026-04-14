@@ -1,10 +1,8 @@
-const tabsEl = document.getElementById('tabs');
 const bracketArea = document.getElementById('bracket-area');
 const popoverOverlay = document.getElementById('popover-overlay');
 const popoverEl = document.getElementById('popover');
 
-let tournaments = [];
-let activeTournamentId = null;
+let activeTournament = null;
 
 // ── Utilities ──
 
@@ -21,60 +19,33 @@ function escAttr(str) {
 // ── Data loading ──
 
 async function loadData() {
-  const res = await fetch('/api/tournaments');
-  tournaments = await res.json();
-
-  const freshIds = tournaments.map(t => t.id);
-  if (activeTournamentId && !freshIds.includes(activeTournamentId)) {
-    activeTournamentId = null;
-  }
-  if (!activeTournamentId && tournaments.length > 0) {
-    activeTournamentId = tournaments[0].id;
-  }
-
-  renderTabs();
-  renderCurrentBracket();
+  const res = await fetch('/api/active');
+  const { tournament } = await res.json();
+  activeTournament = tournament;
+  renderBracketView();
 }
 
-// Poll every 5 seconds
 setInterval(loadData, 5000);
 loadData();
 
-// ── Tabs ──
-
-function renderTabs() {
-  if (tournaments.length === 0) {
-    tabsEl.innerHTML = '';
-    return;
-  }
-  tabsEl.innerHTML = tournaments.map(t => `
-    <button class="tab ${t.id === activeTournamentId ? 'active' : ''}" data-id="${escAttr(t.id)}">
-      ${escHtml(t.name)}
-    </button>
-  `).join('');
-
-  tabsEl.querySelectorAll('.tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-      activeTournamentId = btn.dataset.id;
-      renderTabs();
-      renderCurrentBracket();
-    });
-  });
-}
-
 // ── Bracket rendering ──
 
-function renderCurrentBracket() {
-  if (tournaments.length === 0) {
-    bracketArea.innerHTML = '<p class="no-tournaments">No tournaments yet. <a href="/config">Create one</a>.</p>';
+function renderBracketView() {
+  if (!activeTournament) {
+    bracketArea.innerHTML = '<p class="no-tournaments">No bracket is active. <a href="/config">Set one up</a>.</p>';
     return;
   }
 
-  const t = tournaments.find(t => t.id === activeTournamentId);
-  if (!t) return;
-
+  const t = activeTournament;
   const controlsEnabled = t.settings?.presenterControlsEnabled !== false;
-  renderBracket(bracketArea, t, {
+
+  // Build: heading + bracket wrapper
+  bracketArea.innerHTML = `
+    <h1 class="bracket-title">${escHtml(t.name)}</h1>
+    <div class="bracket-scroll" id="bracket-scroll"></div>
+  `;
+
+  renderBracket(document.getElementById('bracket-scroll'), t, {
     onMatchClick: controlsEnabled ? openPopover : null
   });
 }
@@ -86,8 +57,7 @@ function openPopover(matchEl) {
   const matchId = matchEl.dataset.match;
   const ri = parseInt(matchEl.dataset.roundIndex, 10);
 
-  const t = tournaments.find(x => x.id === tId);
-  const match = t?.rounds[ri]?.matches.find(m => m.id === matchId);
+  const match = activeTournament?.rounds[ri]?.matches.find(m => m.id === matchId);
   if (!match || match.competitors.length === 0) return;
 
   const isSettled = match.winner !== null;
@@ -140,9 +110,7 @@ async function setWinner(tId, roundIndex, matchId, winner) {
     body: JSON.stringify({ winner })
   });
   if (res.ok) {
-    const updated = await res.json();
-    const idx = tournaments.findIndex(t => t.id === tId);
-    if (idx !== -1) tournaments[idx] = updated;
-    renderCurrentBracket();
+    activeTournament = await res.json();
+    renderBracketView();
   }
 }
